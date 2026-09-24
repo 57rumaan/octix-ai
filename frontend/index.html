@@ -404,6 +404,7 @@
     <h3 id="authModalTitle">Log in</h3>
     <p class="hint" id="authHint" style="display:none">Enter the 6-digit code we emailed you.</p>
     <input type="text" id="authIdentifier" placeholder="Email address">
+    <input type="text" id="authUsername" placeholder="Username" style="display:none">
     <input type="password" id="authPassword" placeholder="Password">
     <input type="text" id="authCode" placeholder="6-digit code" style="display:none" inputmode="numeric" maxlength="6">
     <div class="modal-error" id="authError"></div>
@@ -916,6 +917,7 @@ function setAuthMode(mode){
   authTabs.style.display = 'flex';
   authHint.style.display = 'none';
   authIdentifierInput.style.display = 'block';
+    document.getElementById('authUsername').style.display = (mode === 'signup') ? 'block' : 'none';
   authPasswordInput.style.display = 'block';
   authCodeInput.style.display = 'none';
   tabLogin.classList.toggle('active', mode === 'login');
@@ -962,12 +964,13 @@ document.getElementById('settingsDeleteBtn').onclick = async () => {
 async function doLogin(identifier, password){
   const res = await fetch('/api/auth/login', {
     method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ identifier: identifier, password: password })
+    body: JSON.stringify({ identifier, password })
   });
   if (!res.ok) return false;
-  loggedInAs = identifier;
-  authBtnLabel.textContent = identifier;
-  authAvatar.textContent = identifier.slice(0, 1).toUpperCase();
+  const data = await res.json();
+  loggedInAs = data.username || identifier;
+  authBtnLabel.textContent = loggedInAs;
+  authAvatar.textContent = loggedInAs.slice(0, 1).toUpperCase();
   authModal.classList.remove('open');
   return true;
 }
@@ -995,7 +998,7 @@ confirmAuthBtn.onclick = async () => {
     try {
       const res = await fetch('/api/auth/send-code', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ identifier: identifier, password: password })
+                body: JSON.stringify({ identifier, password, username: document.getElementById('authUsername').value.trim() })
       });
       const data = await res.json();
       if (!res.ok) { authError.textContent = data.error || 'Could not send code.'; authError.style.display = 'block'; return; }
@@ -1030,13 +1033,12 @@ async function checkLoginState(){
     const res = await fetch('/api/auth/me');
     if (res.ok) {
       const data = await res.json();
-      loggedInAs = data.identifier;
-      authBtnLabel.textContent = data.identifier;
-      authAvatar.textContent = data.identifier.slice(0, 1).toUpperCase();
+      loggedInAs = data.username || data.identifier;
+      authBtnLabel.textContent = loggedInAs;
+      authAvatar.textContent = loggedInAs.slice(0, 1).toUpperCase();
     }
   } catch (e) {}
 }
-
 // ================= Mic =================
 const micBtn = document.getElementById('micBtn');
 let recognizing = false, recognition;
