@@ -31,10 +31,14 @@ async function sendVerificationEmail(toEmail, code) {
 }
 
 router.post('/send-code', async (req, res) => {
-  const { identifier, password } = req.body;
-  if (!identifier || !password) return res.status(400).json({ error: 'identifier and password required' });
+  const { identifier, password, username } = req.body;
+  if (!identifier || !password || !username) return res.status(400).json({ error: 'identifier, username, and password are required' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier)) {
     return res.status(400).json({ error: 'Only email sign-up is supported right now — enter a valid email.' });
+  }
+  const cleanUsername = String(username).trim();
+  if (cleanUsername.length < 2 || cleanUsername.length > 24) {
+    return res.status(400).json({ error: 'Username should be 2-24 characters.' });
   }
   try {
     const config = await loadModelConfig();
@@ -42,9 +46,12 @@ router.post('/send-code', async (req, res) => {
     if (users.find(u => u.identifier === identifier)) {
       return res.status(409).json({ error: 'account already exists' });
     }
+    if (users.find(u => (u.username || '').toLowerCase() === cleanUsername.toLowerCase())) {
+      return res.status(409).json({ error: 'That username is already taken.' });
+    }
     const passwordHash = await bcrypt.hash(password, 10);
     const code = generateCode();
-    pendingSignups.set(identifier, { passwordHash, code, expiresAt: Date.now() + 10 * 60 * 1000 });
+    pendingSignups.set(identifier, { passwordHash, code, username: cleanUsername, expiresAt: Date.now() + 10 * 60 * 1000 });
     await sendVerificationEmail(identifier, code);
     res.json({ ok: true });
   } catch (err) {
@@ -71,7 +78,14 @@ router.post('/verify-code', async (req, res) => {
       pendingSignups.delete(identifier);
       return res.status(409).json({ error: 'account already exists' });
     }
-    users.push({ id: Date.now().toString(), identifier, passwordHash: pending.passwordHash, createdAt: new Date().toISOString() });
+    users.push({
+      id: Date.now().toString(),
+      identifier,
+      username: pending.username,
+      passwordHash: pending.passwordHash,
+      plan: 'free',
+      createdAt: new Date().toISOString()
+    });
     config.users = users;
     await saveModelConfig(config);
     pendingSignups.delete(identifier);
@@ -93,15 +107,33 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'invalid credentials' });
     }
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-    res.cookie('session', token, { httpOnly: true, sameSite: 'lax' }).json({ ok: true });
+    res.cookie('session', token, { httpOnly: true, sameSite: 'lax' }).json({ ok: true, username: user.username || user.identifier });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not log in — storage error.' });
   }
 });
-// GET /api/auth/me — checks the login cookie and confirms who's logged in.
+
 router.post('/logout', (req, res) => {
-  router.post('/delete-account', async (req, res) => {
+  res.clearCookie('session').json({ ok: true });
+});
+
+router.get('/me', async (req, res) => {
+  const token = req.cookies?.session;
+  if (!token) return res.status(401).json({ error: 'not logged in' });
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const config = await loadModelConfig();
+    const users = config.users || [];
+    const user = users.find(u => u.id === payload.userId);
+    if (!user) return res.status(401).json({ error: 'not logged in' });
+    res.json({ identifier: user.identifier, username: user.username || user.identifier, plan: user.plan || 'free' });
+  } catch {
+    res.status(401).json({ error: 'session expired' });
+  }
+});
+
+router.post('/delete-account', async (req, res) => {
   const token = req.cookies?.session;
   if (!token) return res.status(401).json({ error: 'not logged in' });
   try {
@@ -115,22 +147,7 @@ router.post('/logout', (req, res) => {
     res.status(500).json({ error: 'Could not delete account.' });
   }
 });
-  res.clearCookie('session').json({ ok: true });
-});
-router.get('/me', async (req, res) => {
-  const token = req.cookies?.session;
-  if (!token) return res.status(401).json({ error: 'not logged in' });
-  try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const config = await loadModelConfig();
-    const users = config.users || [];
-    const user = users.find(u => u.id === payload.userId);
-    if (!user) return res.status(401).json({ error: 'not logged in' });
-    res.json({ identifier: user.identifier });
-  } catch {
-    res.status(401).json({ error: 'session expired' });
-  }
-});
+
 router.post('/oauth/:provider', (req, res) => {
   res.status(501).json({ error: `${req.params.provider} OAuth not wired up yet.` });
 });
